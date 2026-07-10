@@ -8,21 +8,24 @@ const PRIORITY_META = {
   maybe: { label: "Maybe", short: "?" }
 };
 const NOTE_SIZES = {
-  sticky: { width: 205, height: 140 },
-  paper: { width: 205, height: 146 },
-  card: { width: 205, height: 146 },
-  bubble: { width: 208, height: 148 },
-  label: { width: 248, height: 104 },
-  square: { width: 172, height: 172 },
-  circle: { width: 180, height: 180 }
+  sticky: { width: 212, height: 160 },
+  paper: { width: 212, height: 166 },
+  card: { width: 212, height: 166 },
+  bubble: { width: 216, height: 168 },
+  label: { width: 260, height: 132 },
+  square: { width: 184, height: 184 },
+  circle: { width: 196, height: 196 }
 };
+const DEFAULT_NOTE_STYLE = { sizeScale: 100, fontSize: 13 };
+const DEFAULT_DRAW_STYLE = { color: "#6d5bd0", opacity: .8, gradient: false, gradientTo: "#ef745f" };
+const ERASER_RADIUS = 14;
 const CANVAS_WIDTH = 1040;
 const CANVAS_HEIGHT = 680;
 const CONNECTION_STYLES = [
-  { className: "connection-solid", color: "#6d5bd0", shape: "curve" },
-  { className: "connection-marker", color: "#ef745f", shape: "swoop" },
-  { className: "connection-dashed", color: "#2e92a6", shape: "line" },
-  { className: "connection-crayon", color: "#9a6a13", shape: "loop" }
+  { className: "connection-solid", color: "#6d5bd0" },
+  { className: "connection-marker", color: "#ef745f" },
+  { className: "connection-dashed", color: "#2e92a6" },
+  { className: "connection-crayon", color: "#9a6a13" }
 ];
 const STOP_WORDS = new Set(["about", "after", "again", "ahead", "also", "and", "are", "but", "can", "come", "could", "every", "for", "from", "get", "give", "have", "how", "into", "just", "like", "make", "maybe", "more", "not", "only", "our", "out", "over", "really", "should", "some", "that", "the", "their", "them", "then", "there", "they", "thing", "this", "through", "use", "want", "what", "when", "where", "which", "with", "would"]);
 const CONCEPT_KEYWORDS = {
@@ -108,9 +111,11 @@ let selectedNoteIds = new Set();
 let selectedDrawingIds = new Set();
 let currentTool = "select";
 let activeDrawing = null;
+let eraserState = null;
 let selectionBoxState = null;
 let editorSearchQuery = "";
 let insightPanelOpen = true;
+let styleControlEditing = false;
 const undoStacks = {};
 const redoStacks = {};
 let toastTimer = null;
@@ -132,7 +137,13 @@ function noteVariantFor(note, index = 0) {
 }
 
 function noteSize(note) {
-  return NOTE_SIZES[noteVariantFor(note)] || NOTE_SIZES.sticky;
+  const base = NOTE_SIZES[noteVariantFor(note)] || NOTE_SIZES.sticky;
+  const scale = clamp(Number(note.sizeScale ?? DEFAULT_NOTE_STYLE.sizeScale), 80, 160) / 100;
+  return { width: Math.round(base.width * scale), height: Math.round(base.height * scale) };
+}
+
+function noteFontSize(note) {
+  return clamp(Number(note.fontSize ?? DEFAULT_NOTE_STYLE.fontSize), 10, 22);
 }
 
 function clamp(value, min, max) {
@@ -146,6 +157,7 @@ function syncPrimarySelection() {
 function refreshSelectionClasses() {
   $$(".canvas-note").forEach(element => element.classList.toggle("selected", selectedNoteIds.has(element.dataset.noteId)));
   $$(".doodle-path").forEach(element => element.classList.toggle("selected", selectedDrawingIds.has(element.dataset.drawingId)));
+  syncStyleControls();
 }
 
 function clearSelection() {
@@ -189,21 +201,39 @@ function matchesEditorSearch(note) {
 }
 
 function normalizeData(source) {
+  source.settings ||= {};
+  source.settings.note = { ...DEFAULT_NOTE_STYLE, ...(source.settings.note || {}) };
+  source.settings.note.sizeScale = clamp(Number(source.settings.note.sizeScale), 80, 160);
+  source.settings.note.fontSize = clamp(Number(source.settings.note.fontSize), 10, 22);
+  source.settings.draw = { ...DEFAULT_DRAW_STYLE, ...(source.settings.draw || {}) };
+  source.settings.draw.opacity = clamp(Number(source.settings.draw.opacity), .15, 1);
+  source.settings.draw.gradient = Boolean(source.settings.draw.gradient);
+  source.settings.draw.color ||= DEFAULT_DRAW_STYLE.color;
+  source.settings.draw.gradientTo ||= DEFAULT_DRAW_STYLE.gradientTo;
   source.boards ||= [];
   source.boards.forEach(board => {
     board.pages ||= [{ id: uid("page"), notes: [], connections: [], drawings: [] }];
     board.pages.forEach(page => {
       page.notes ||= [];
       page.connections ||= [];
+      page.connections = page.connections.map((connection, index) => normalizeConnection(connection, index));
       page.drawings ||= [];
-      page.groups ||= [];
+      page.groups = (page.groups || []).filter(group => Array.isArray(group.noteIds));
       page.notes.forEach((note, index) => {
         note.color ||= NOTE_COLORS[index % NOTE_COLORS.length];
         note.tag ||= inferTag(note.text || "");
         note.variant = noteVariantFor(note, index);
         note.priority ||= "normal";
+        note.sizeScale = clamp(Number(note.sizeScale ?? source.settings.note.sizeScale), 80, 160);
+        note.fontSize = clamp(Number(note.fontSize ?? source.settings.note.fontSize), 10, 22);
         note.x ??= 90 + (index * 215) % 760;
         note.y ??= 90 + (Math.floor(index / 3) * 180) % 430;
+      });
+      page.drawings.forEach(drawing => {
+        drawing.color ||= source.settings.draw.color;
+        drawing.opacity = clamp(Number(drawing.opacity ?? source.settings.draw.opacity), .15, 1);
+        drawing.gradient = Boolean(drawing.gradient);
+        drawing.gradientTo ||= source.settings.draw.gradientTo;
       });
     });
   });
@@ -456,6 +486,8 @@ function createBoard(starter = "blank") {
   notes.forEach((note, index) => {
     note.priority = "normal";
     note.variant = noteVariantFor(note, index);
+    note.sizeScale = data.settings.note.sizeScale;
+    note.fontSize = data.settings.note.fontSize;
   });
   data.boards.unshift({ id: boardId, title, category: "New", favorite: false, updatedAt: Date.now(), pages: [{ id: pageId, notes, connections: [], drawings: [], groups: [] }] });
   saveData();
@@ -574,6 +606,68 @@ function doodleMarkup(text) {
   return `<span class="note-doodle" data-doodle="${doodle.type}" title="Auto doodle: ${doodle.type}">${doodle.svg}</span>`;
 }
 
+function groupBubbleMetrics(group, page = getPage()) {
+  const notes = (group.noteIds || [])
+    .map(noteId => page?.notes.find(note => note.id === noteId))
+    .filter(Boolean);
+  if (!notes.length) return null;
+  const rects = notes.map(noteRect);
+  const left = Math.min(...rects.map(rect => rect.x));
+  const top = Math.min(...rects.map(rect => rect.y));
+  const right = Math.max(...rects.map(rect => rect.x + rect.width));
+  const bottom = Math.max(...rects.map(rect => rect.y + rect.height));
+  const paddingX = notes.length === 1 ? 18 : 38;
+  const paddingY = notes.length === 1 ? 16 : 30;
+  const bubble = {
+    x: clamp(left - paddingX, 8, CANVAS_WIDTH - 32),
+    y: clamp(top - paddingY, 38, CANVAS_HEIGHT - 32),
+    width: Math.min(CANVAS_WIDTH - 16, right - left + paddingX * 2),
+    height: Math.min(CANVAS_HEIGHT - 48, bottom - top + paddingY * 2)
+  };
+  if (bubble.x + bubble.width > CANVAS_WIDTH - 8) bubble.x = CANVAS_WIDTH - bubble.width - 8;
+  if (bubble.y + bubble.height > CANVAS_HEIGHT - 8) bubble.y = CANVAS_HEIGHT - bubble.height - 8;
+  const titleWidth = clamp(Math.max(150, String(group.label || "").length * 8 + 74), 150, Math.min(260, bubble.width));
+  return {
+    ...bubble,
+    titleX: clamp(bubble.x + 18, 8, CANVAS_WIDTH - titleWidth - 8),
+    titleY: Math.max(6, bubble.y - 34),
+    titleWidth
+  };
+}
+
+function groupMarkupFor(group, page) {
+  const metrics = groupBubbleMetrics(group, page);
+  if (!metrics) return "";
+  const count = (group.noteIds || []).length;
+  return `
+    <div class="circle-group-ring" data-group-id="${group.id}" style="left:${metrics.x}px;top:${metrics.y}px;width:${metrics.width}px;height:${metrics.height}px"></div>
+    <div class="circle-group-title" data-group-title-id="${group.id}" style="left:${metrics.titleX}px;top:${metrics.titleY}px;width:${metrics.titleWidth}px">
+      <strong>${escapeHtml(group.label)}</strong><small>${count} ${count === 1 ? "idea" : "ideas"}</small>
+    </div>`;
+}
+
+function updateGroupOverlays() {
+  const page = getPage();
+  if (!page?.groups?.length) return;
+  page.groups.forEach(group => {
+    const metrics = groupBubbleMetrics(group, page);
+    if (!metrics) return;
+    const ring = $(`[data-group-id="${group.id}"]`);
+    const title = $(`[data-group-title-id="${group.id}"]`);
+    if (ring) {
+      ring.style.left = `${metrics.x}px`;
+      ring.style.top = `${metrics.y}px`;
+      ring.style.width = `${metrics.width}px`;
+      ring.style.height = `${metrics.height}px`;
+    }
+    if (title) {
+      title.style.left = `${metrics.titleX}px`;
+      title.style.top = `${metrics.titleY}px`;
+      title.style.width = `${metrics.titleWidth}px`;
+    }
+  });
+}
+
 function renderCanvas() {
   const page = getPage();
   if (!page) return;
@@ -583,28 +677,28 @@ function renderCanvas() {
   $("#ideaCanvas").classList.toggle("erasing", currentTool === "eraser");
   $("#connectionsLayer").classList.toggle("selecting", currentTool === "select");
   $("#connectionsLayer").classList.toggle("erasing", currentTool === "eraser");
-  const groupMarkup = page.groups.map(group => `
-    <div class="circle-group-ring" style="left:${group.x - group.radius}px;top:${group.y - group.radius}px;width:${group.radius * 2}px;height:${group.radius * 2}px"></div>
-    <div class="circle-group-title" style="left:${group.x - 72}px;top:${group.y - 24}px">
-      <strong>${escapeHtml(group.label)}</strong><small>${group.count} ${group.count === 1 ? "idea" : "ideas"}</small>
-    </div>`).join("");
+  const groupMarkup = page.groups.map(group => groupMarkupFor(group, page)).join("");
   const noteMarkup = page.notes.map((note, index) => {
     const variant = noteVariantFor(note, index);
     note.variant = variant;
     note.priority ||= "normal";
+    note.sizeScale ??= data.settings.note.sizeScale;
+    note.fontSize ??= data.settings.note.fontSize;
+    const size = noteSize(note);
+    const fontSize = noteFontSize(note);
     const rotation = index % 3 === 0 ? "-1.4deg" : index % 3 === 1 ? ".9deg" : ".25deg";
     const searchClass = editorSearchQuery ? (matchesEditorSearch(note) ? "search-match" : "search-dim") : "";
     const priority = priorityMeta(note.priority);
     return `
-    <article class="canvas-note note-variant-${variant} priority-${note.priority} ${searchClass} ${selectedNoteIds.has(note.id) ? "selected" : ""}" data-note-id="${note.id}" style="left:${note.x}px;top:${note.y}px;--note-color:${note.color};--rotation:${rotation}">
+    <article class="canvas-note note-variant-${variant} priority-${note.priority} ${searchClass} ${selectedNoteIds.has(note.id) ? "selected" : ""}" data-note-id="${note.id}" style="left:${note.x}px;top:${note.y}px;width:${size.width}px;min-height:${size.height}px;--note-color:${note.color};--note-font-size:${fontSize}px;--rotation:${rotation}">
       ${doodleMarkup(note.text)}
       <textarea class="note-text" spellcheck="true" maxlength="220" aria-label="Idea text">${escapeHtml(note.text)}</textarea>
       <div class="note-bottom">
         <span class="note-tag">${escapeHtml(note.tag || "idea")}</span>
         <span class="note-actions">
           <button class="note-priority" type="button" aria-label="Change idea priority" title="Priority: ${priority.label}">${priority.short}</button>
-          <button class="note-shape" type="button" aria-label="Change note shape" title="Change note shape">shape</button>
-          <button class="note-menu" type="button" aria-label="Change note color">...</button>
+          <button class="note-shape" type="button" aria-label="Change note shape" title="Change note shape">S</button>
+          <button class="note-menu" type="button" aria-label="Change note color" title="Change note color">C</button>
         </span>
       </div>
     </article>`;
@@ -613,12 +707,25 @@ function renderCanvas() {
   $("#canvasHint").hidden = page.notes.length > 0;
   drawConnections();
   resizeNoteTextareas();
+  syncStyleControls();
 }
 
 function resizeNoteTextareas(root = document) {
   $$(".note-text", root).forEach(textarea => {
+    const noteElement = textarea.closest(".canvas-note");
+    const note = getPage()?.notes.find(item => item.id === noteElement?.dataset.noteId);
+    const requestedFont = note ? noteFontSize(note) : DEFAULT_NOTE_STYLE.fontSize;
+    textarea.style.fontSize = `${requestedFont}px`;
     textarea.style.height = "auto";
-    textarea.style.height = `${Math.min(textarea.scrollHeight, 112)}px`;
+    const bottom = noteElement?.querySelector(".note-bottom");
+    const available = Math.max(42, (noteElement?.clientHeight || 140) - (bottom?.offsetHeight || 26) - 50);
+    let fittedFont = requestedFont;
+    while (textarea.scrollHeight > available && fittedFont > 10) {
+      fittedFont -= 1;
+      textarea.style.fontSize = `${fittedFont}px`;
+      textarea.style.height = "auto";
+    }
+    textarea.style.height = `${Math.min(textarea.scrollHeight, available)}px`;
   });
 }
 
@@ -661,27 +768,65 @@ function arrowFor(end, angle, color, className) {
   return `<path class="connection-arrow ${className}" style="fill:${color}" d="M ${end.x} ${end.y} L ${ax1} ${ay1} L ${ax2} ${ay2} Z"/>`;
 }
 
+function connectionIds(connection) {
+  return Array.isArray(connection) ? [connection[0], connection[1]] : [connection.from, connection.to];
+}
+
+function connectionShape(fromId, toId, index) {
+  return index % 2 === 0 ? "line" : "curve";
+}
+
+function normalizeConnection(connection, index = 0) {
+  const [fromId, toId] = connectionIds(connection);
+  const storedShape = Array.isArray(connection) ? connection[2] : connection.shape;
+  const shape = ["line", "curve"].includes(storedShape) ? storedShape : connectionShape(fromId, toId, index);
+  return [fromId, toId, shape];
+}
+
+function withConnectionShapes(connections) {
+  const shaped = connections.map(([fromId, toId]) => [fromId, toId, Math.random() < .5 ? "line" : "curve"]);
+  if (shaped.length > 1 && shaped.every(connection => connection[2] === shaped[0][2])) {
+    shaped[0][2] = shaped[0][2] === "line" ? "curve" : "line";
+  }
+  return shaped;
+}
+
+function drawingGradientId(drawing) {
+  return `drawing-gradient-${String(drawing.id).replace(/[^a-z0-9_-]/gi, "")}`;
+}
+
 function drawConnections() {
   const page = getPage();
   const layer = $("#connectionsLayer");
   if (!page || !layer) return;
+  const defs = [];
   const doodles = (page.drawings || []).map(drawing => {
     if (drawing.points.length < 2) return "";
+    drawing.opacity = clamp(Number(drawing.opacity ?? data.settings.draw.opacity), .15, 1);
+    drawing.color ||= data.settings.draw.color;
+    drawing.gradientTo ||= data.settings.draw.gradientTo;
+    const stroke = drawing.gradient ? `url(#${drawingGradientId(drawing)})` : drawing.color;
+    if (drawing.gradient) {
+      const first = drawing.points[0];
+      const last = drawing.points[drawing.points.length - 1];
+      defs.push(`<linearGradient id="${drawingGradientId(drawing)}" gradientUnits="userSpaceOnUse" x1="${first[0]}" y1="${first[1]}" x2="${last[0]}" y2="${last[1]}"><stop offset="0%" stop-color="${drawing.color}"/><stop offset="100%" stop-color="${drawing.gradientTo}"/></linearGradient>`);
+    }
     const path = drawing.points.map((point, index) => `${index ? "L" : "M"} ${point[0].toFixed(1)} ${point[1].toFixed(1)}`).join(" ");
-    return `<path class="doodle-path ${selectedDrawingIds.has(drawing.id) ? "selected" : ""}" data-drawing-id="${drawing.id}" d="${path}" style="stroke:${drawing.color || "#6d5bd0"}"/>`;
+    return `<path class="doodle-path ${selectedDrawingIds.has(drawing.id) ? "selected" : ""}" data-drawing-id="${drawing.id}" d="${path}" style="stroke:${stroke};opacity:${drawing.opacity}"/>`;
   }).join("");
-  const connections = page.connections.map(([fromId, toId], index) => {
+  const connections = page.connections.map((connection, index) => {
+    const [fromId, toId] = connectionIds(connection);
     const from = page.notes.find(note => note.id === fromId);
     const to = page.notes.find(note => note.id === toId);
     if (!from || !to) return "";
     const style = CONNECTION_STYLES[index % CONNECTION_STYLES.length];
     const start = noteCenter(from);
     const end = noteCenter(to);
-    const geometry = connectionGeometry(start, end, index, style.shape);
+    const geometry = connectionGeometry(start, end, index, normalizeConnection(connection, index)[2]);
     const echo = style.className === "connection-crayon" ? `<path class="connection-path connection-echo" style="stroke:${style.color}" d="${geometry.path}"/>` : "";
     return `${echo}<path class="connection-path ${style.className}" data-from="${fromId}" data-to="${toId}" style="stroke:${style.color}" d="${geometry.path}"/>${arrowFor(end, geometry.angle, style.color, style.className)}`;
   }).join("");
-  layer.innerHTML = doodles + connections;
+  layer.innerHTML = `${defs.length ? `<defs>${defs.join("")}</defs>` : ""}${doodles}${connections}`;
 }
 
 function addPage() {
@@ -708,7 +853,9 @@ function addNote(text = "New thought…", x, y, color) {
     y: y ?? 90 + (Math.floor(count / 3) * 180) % 430,
     tag: inferTag(text),
     variant: NOTE_VARIANTS[count % NOTE_VARIANTS.length],
-    priority: "normal"
+    priority: "normal",
+    sizeScale: data.settings.note.sizeScale,
+    fontSize: data.settings.note.fontSize
   };
   page.notes.push(note);
   getBoard().updatedAt = Date.now();
@@ -822,34 +969,42 @@ function groupNotesByCategory(notes) {
 
 function circleSortIdeas() {
   const page = getPage();
-  if (!page || page.notes.length < 2) {
-    showToast("Add a few ideas before circle sorting");
+  if (!page || page.notes.length < 1) {
+    showToast("Add an idea before circle sorting");
     return;
   }
   pushHistory();
   const groups = groupNotesByCategory(page.notes);
-  const columns = Math.min(3, Math.max(1, groups.length));
-  const gapX = CANVAS_WIDTH / columns;
-  const gapY = groups.length > 3 ? 270 : 330;
+  const columns = groups.length === 1 ? 1 : Math.min(3, groups.length);
+  const columnWidth = CANVAS_WIDTH / columns;
+  const columnTops = Array(columns).fill(72);
   page.groups = [];
   groups.forEach(([label, notes], index) => {
-    const column = index % columns;
-    const row = Math.floor(index / columns);
-    const center = {
-      x: gapX * column + gapX / 2,
-      y: 205 + row * gapY
-    };
-    const radius = clamp(88 + notes.length * 18, 112, 170);
-    page.groups.push({ id: uid("group"), label, count: notes.length, x: center.x, y: center.y, radius });
+    const column = columnTops.indexOf(Math.min(...columnTops));
+    const sizes = notes.map(noteSize);
+    const maxWidth = Math.max(...sizes.map(size => size.width));
+    const maxHeight = Math.max(...sizes.map(size => size.height));
+    const innerGap = notes.length === 1 ? 0 : 28;
+    const possibleColumns = Math.max(1, Math.floor((columnWidth - 84) / (maxWidth + innerGap)));
+    const noteColumns = notes.length === 1 ? 1 : Math.min(notes.length, possibleColumns, 3);
+    const noteRows = Math.ceil(notes.length / noteColumns);
+    const bubbleWidth = Math.min(columnWidth - 28, noteColumns * maxWidth + (noteColumns - 1) * innerGap + 76);
+    const bubbleHeight = Math.min(CANVAS_HEIGHT - 64, noteRows * maxHeight + (noteRows - 1) * innerGap + 60);
+    const bubbleX = clamp(column * columnWidth + (columnWidth - bubbleWidth) / 2, 16, CANVAS_WIDTH - bubbleWidth - 16);
+    const bubbleY = clamp(columnTops[column] + 34, 48, CANVAS_HEIGHT - bubbleHeight - 14);
+    const startX = bubbleX + 38;
+    const startY = bubbleY + 30;
+    page.groups.push({ id: uid("group"), label, noteIds: notes.map(note => note.id) });
     notes.forEach((note, noteIndex) => {
       const size = noteSize(note);
-      const angle = -Math.PI / 2 + (Math.PI * 2 * noteIndex) / Math.max(1, notes.length);
-      const ringRadius = notes.length === 1 ? 0 : radius;
-      note.x = clamp(center.x + Math.cos(angle) * ringRadius - size.width / 2, 14, CANVAS_WIDTH - size.width - 14);
-      note.y = clamp(center.y + Math.sin(angle) * ringRadius - size.height / 2, 20, CANVAS_HEIGHT - size.height - 20);
+      const noteColumn = noteIndex % noteColumns;
+      const noteRow = Math.floor(noteIndex / noteColumns);
+      note.x = clamp(startX + noteColumn * (maxWidth + innerGap) + (maxWidth - size.width) / 2, 14, CANVAS_WIDTH - size.width - 14);
+      note.y = clamp(startY + noteRow * (maxHeight + innerGap) + (maxHeight - size.height) / 2, 48, CANVAS_HEIGHT - size.height - 20);
     });
+    columnTops[column] = bubbleY + bubbleHeight + 52;
   });
-  page.connections = findSimilarConnections(page.notes).connections;
+  page.connections = withConnectionShapes(findSimilarConnections(page.notes).connections);
   getBoard().updatedAt = Date.now();
   saveData(true);
   renderCanvas();
@@ -867,7 +1022,7 @@ function organizeIdeas() {
     note.tag = inferTag(note.text);
   });
   const matches = findSimilarConnections(page.notes);
-  page.connections = matches.connections;
+  page.connections = withConnectionShapes(matches.connections);
   page.groups = [];
   const components = layoutBySimilarity(page.notes, page.connections);
   getBoard().updatedAt = Date.now();
@@ -966,7 +1121,7 @@ function deleteSelectedItems() {
   pushHistory();
   const deletedNoteIds = new Set(selectedNoteIds);
   page.notes = page.notes.filter(note => !deletedNoteIds.has(note.id));
-  page.connections = page.connections.filter(pair => !pair.some(id => deletedNoteIds.has(id)));
+  page.connections = page.connections.filter(connection => !connectionIds(connection).some(id => deletedNoteIds.has(id)));
   page.drawings = (page.drawings || []).filter(drawing => !selectedDrawingIds.has(drawing.id));
   page.groups = [];
   clearSelection();
@@ -1026,6 +1181,66 @@ function drawingBounds(drawing) {
   return { x, y, width: Math.max(...xs) - x, height: Math.max(...ys) - y };
 }
 
+function pointDistance(first, second) {
+  return Math.hypot(first.x - second[0], first.y - second[1]);
+}
+
+function distanceToSegment(point, start, end) {
+  const dx = end[0] - start[0];
+  const dy = end[1] - start[1];
+  const lengthSquared = dx * dx + dy * dy;
+  if (!lengthSquared) return pointDistance(point, start);
+  const t = clamp(((point.x - start[0]) * dx + (point.y - start[1]) * dy) / lengthSquared, 0, 1);
+  return Math.hypot(point.x - (start[0] + t * dx), point.y - (start[1] + t * dy));
+}
+
+function splitDrawingAroundEraser(drawing, point, radius = ERASER_RADIUS) {
+  const chunks = [];
+  let current = [];
+  drawing.points.forEach((drawingPointValue, index) => {
+    const nearPoint = pointDistance(point, drawingPointValue) <= radius;
+    const nearSegment = index > 0 && distanceToSegment(point, drawing.points[index - 1], drawingPointValue) <= radius;
+    if (nearPoint) {
+      if (current.length > 1) chunks.push(current);
+      current = [];
+      return;
+    }
+    if (nearSegment) {
+      if (current.length > 1) chunks.push(current);
+      current = [drawingPointValue];
+      return;
+    }
+    current.push(drawingPointValue);
+  });
+  if (current.length > 1) chunks.push(current);
+  return chunks;
+}
+
+function eraseDrawingsAt(point) {
+  const page = getPage();
+  if (!page?.drawings?.length) return false;
+  let changed = false;
+  const nextDrawings = [];
+  page.drawings.forEach(drawing => {
+    if (!drawing.points?.length) return;
+    const chunks = splitDrawingAroundEraser(drawing, point);
+    const unchanged = chunks.length === 1 && chunks[0].length === drawing.points.length;
+    if (unchanged) {
+      nextDrawings.push(drawing);
+      return;
+    }
+    changed = true;
+    chunks.forEach((points, index) => {
+      nextDrawings.push({ ...drawing, id: index === 0 ? drawing.id : uid("doodle"), points: points.map(([x, y]) => [x, y]) });
+    });
+  });
+  if (!changed) return false;
+  page.drawings = nextDrawings;
+  selectedDrawingIds.clear();
+  drawConnections();
+  return true;
+}
+
 function updateSelectionBox(rect) {
   const box = $("#selectionBox");
   box.hidden = false;
@@ -1063,8 +1278,6 @@ function handlePointerDown(event) {
   if (!note) return;
 
   if (currentTool === "eraser") {
-    event.preventDefault();
-    eraseNote(note.id);
     return;
   }
   if (currentTool !== "select" || event.target.matches("button")) return;
@@ -1116,6 +1329,7 @@ function handlePointerMove(event) {
     }
   });
   drawConnections();
+  updateGroupOverlays();
 }
 
 function handlePointerUp() {
@@ -1150,8 +1364,6 @@ function handleDrawingPointerDown(event) {
   if (!path) return;
   const drawingId = path.dataset.drawingId;
   if (currentTool === "eraser") {
-    event.preventDefault();
-    eraseDrawing(drawingId);
     return;
   }
   if (currentTool !== "select") return;
@@ -1169,7 +1381,7 @@ function startDrawing(event) {
   if (currentTool !== "pen" || event.button !== 0) return;
   event.preventDefault();
   pushHistory();
-  const drawing = { id: uid("doodle"), color: "#6d5bd0", points: [drawingPoint(event)] };
+  const drawing = { id: uid("doodle"), ...data.settings.draw, points: [drawingPoint(event)] };
   getPage().drawings ||= [];
   getPage().drawings.push(drawing);
   activeDrawing = drawing;
@@ -1194,6 +1406,149 @@ function finishDrawing() {
   saveData(true);
 }
 
+function startErasing(event) {
+  if (currentTool !== "eraser" || event.button !== 0 || eraserState) return;
+  event.preventDefault();
+  const page = getPage();
+  if (!page) return;
+  pushHistory();
+  eraserState = { pageId: page.id, changed: false };
+  $("#ideaCanvas").setPointerCapture(event.pointerId);
+  eraserState.changed = eraseDrawingsAt(canvasPoint(event)) || eraserState.changed;
+}
+
+function continueErasing(event) {
+  if (!eraserState) return;
+  event.preventDefault();
+  eraserState.changed = eraseDrawingsAt(canvasPoint(event)) || eraserState.changed;
+}
+
+function finishErasing() {
+  if (!eraserState) return;
+  if (eraserState.changed) {
+    getBoard().updatedAt = Date.now();
+    saveData(true);
+  } else {
+    undoStacks[eraserState.pageId]?.pop();
+  }
+  eraserState = null;
+}
+
+function selectedNotes() {
+  return getPage()?.notes.filter(note => selectedNoteIds.has(note.id)) || [];
+}
+
+function selectedDrawings() {
+  return getPage()?.drawings.filter(drawing => selectedDrawingIds.has(drawing.id)) || [];
+}
+
+function syncStyleControls() {
+  const noteSizeInput = $("#noteSizeInput");
+  if (!noteSizeInput) return;
+  const notes = selectedNotes();
+  const noteStyle = notes[0] || data.settings.note;
+  const noteScale = Math.round(noteStyle.sizeScale ?? data.settings.note.sizeScale);
+  const fontSize = Math.round(noteStyle.fontSize ?? data.settings.note.fontSize);
+  noteSizeInput.value = noteScale;
+  $("#noteSizeOutput").textContent = `${noteScale}%`;
+  $("#noteFontSizeInput").value = fontSize;
+  $("#noteFontSizeOutput").textContent = `${fontSize}px`;
+
+  const drawings = selectedDrawings();
+  const drawStyle = drawings[0] || data.settings.draw;
+  $("#drawColorInput").value = drawStyle.color || data.settings.draw.color;
+  const opacity = Math.round(clamp(Number(drawStyle.opacity ?? data.settings.draw.opacity), .15, 1) * 100);
+  $("#drawOpacityInput").value = opacity;
+  $("#drawOpacityOutput").textContent = `${opacity}%`;
+  $("#drawGradientToggle").checked = Boolean(drawStyle.gradient);
+  $("#drawGradientColorInput").value = drawStyle.gradientTo || data.settings.draw.gradientTo;
+}
+
+function beginStyleEdit(kind) {
+  if (styleControlEditing) return;
+  const hasSelectedTarget = kind === "note" ? selectedNoteIds.size > 0 : selectedDrawingIds.size > 0;
+  if (hasSelectedTarget) pushHistory();
+  styleControlEditing = true;
+}
+
+function finishStyleEdit() {
+  if (!styleControlEditing) return;
+  styleControlEditing = false;
+  if (currentBoardId) {
+    getBoard().updatedAt = Date.now();
+    saveData(true);
+  } else {
+    saveData();
+  }
+}
+
+function applyNoteStyleControls() {
+  const sizeScale = Number($("#noteSizeInput").value);
+  const fontSize = Number($("#noteFontSizeInput").value);
+  $("#noteSizeOutput").textContent = `${sizeScale}%`;
+  $("#noteFontSizeOutput").textContent = `${fontSize}px`;
+  const notes = selectedNotes();
+  if (!notes.length) {
+    data.settings.note.sizeScale = sizeScale;
+    data.settings.note.fontSize = fontSize;
+    saveData();
+    return;
+  }
+  notes.forEach(note => {
+    note.sizeScale = sizeScale;
+    note.fontSize = fontSize;
+    const size = noteSize(note);
+    note.x = clamp(note.x, 0, CANVAS_WIDTH - size.width);
+    note.y = clamp(note.y, 0, CANVAS_HEIGHT - size.height);
+  });
+  getBoard().updatedAt = Date.now();
+  saveData(true);
+  renderCanvas();
+}
+
+function applyDrawStyleControls() {
+  const style = {
+    color: $("#drawColorInput").value,
+    opacity: Number($("#drawOpacityInput").value) / 100,
+    gradient: $("#drawGradientToggle").checked,
+    gradientTo: $("#drawGradientColorInput").value
+  };
+  $("#drawOpacityOutput").textContent = `${Math.round(style.opacity * 100)}%`;
+  const drawings = selectedDrawings();
+  if (!drawings.length) {
+    data.settings.draw = style;
+    saveData();
+    return;
+  }
+  drawings.forEach(drawing => Object.assign(drawing, style));
+  getBoard().updatedAt = Date.now();
+  saveData(true);
+  drawConnections();
+}
+
+function bindStyleControls() {
+  const noteInputs = [$("#noteSizeInput"), $("#noteFontSizeInput")];
+  const drawInputs = [$("#drawColorInput"), $("#drawOpacityInput"), $("#drawGradientToggle"), $("#drawGradientColorInput")];
+  noteInputs.forEach(input => {
+    input.addEventListener("pointerdown", () => beginStyleEdit("note"));
+    input.addEventListener("focus", () => beginStyleEdit("note"));
+    input.addEventListener("input", applyNoteStyleControls);
+    input.addEventListener("change", finishStyleEdit);
+    input.addEventListener("blur", finishStyleEdit);
+  });
+  drawInputs.forEach(input => {
+    input.addEventListener("pointerdown", () => beginStyleEdit("draw"));
+    input.addEventListener("focus", () => beginStyleEdit("draw"));
+    input.addEventListener("input", applyDrawStyleControls);
+    input.addEventListener("change", () => {
+      applyDrawStyleControls();
+      finishStyleEdit();
+    });
+    input.addEventListener("blur", finishStyleEdit);
+  });
+  syncStyleControls();
+}
+
 function applyZoom(nextZoom) {
   zoom = Math.max(.6, Math.min(1.3, nextZoom));
   $("#ideaCanvas").style.transform = `scale(${zoom})`;
@@ -1212,13 +1567,13 @@ function helperReplyFor(message) {
     return "Use the select tool to click notes or drawings. Shift-click adds more items, and dragging on empty paper draws a selection box.";
   }
   if (/erase|eraser|delete|remove/.test(text)) {
-    return "Pick the eraser tool, then click a note or drawing to remove it. You can also select several items and press Delete.";
+    return "Pick the eraser tool, then drag across drawing strokes to remove only the crossed area. Select items and press Delete to remove whole notes or drawings.";
   }
   if (/search|find/.test(text)) {
     return "Use the Find idea box in the scratchpad toolbar to highlight matching notes and dim the rest.";
   }
   if (/circle|sort|category|categories/.test(text)) {
-    return "Circle sort groups notes by category, places related ideas around a labeled circle, and keeps similar-idea connectors between the strongest matches.";
+    return "Circle sort groups notes by category, places them inside flexible bubbles, and keeps similar-idea connectors between the strongest matches.";
   }
   if (/share|link|url|send/.test(text)) {
     return "Open a scratchpad and press Share. The address changes to include the scratchpad and page, so the copied link can reopen that exact page on the same saved data.";
@@ -1255,6 +1610,7 @@ function askHelper(message) {
 }
 
 function bindEvents() {
+  bindStyleControls();
   $("#quickIdeaInput").addEventListener("input", event => {
     $("#quickAddButton").disabled = !event.target.value.trim();
     event.target.style.height = "auto";
@@ -1494,6 +1850,9 @@ function bindEvents() {
   $("#ideaCanvas").addEventListener("pointerdown", startDrawing);
   $("#ideaCanvas").addEventListener("pointermove", continueDrawing);
   window.addEventListener("pointerup", finishDrawing);
+  $("#ideaCanvas").addEventListener("pointerdown", startErasing);
+  $("#ideaCanvas").addEventListener("pointermove", continueErasing);
+  window.addEventListener("pointerup", finishErasing);
 
   $("#organizeButton").addEventListener("click", organizeIdeas);
   $("#circleSortButton").addEventListener("click", circleSortIdeas);
@@ -1528,7 +1887,7 @@ function bindEvents() {
     if (tool === "note" || tool === "text") addNote();
     if (tool === "connector") organizeIdeas();
     if (tool === "pen") showToast("Drag anywhere on the paper to doodle");
-    if (tool === "eraser") showToast("Eraser on — click a note or drawing to remove it");
+    if (tool === "eraser") showToast("Eraser on - drag across drawing strokes");
     if (tool === "select") showToast("Select on — shift-click or drag a box to multi-select");
     renderCanvas();
   }));

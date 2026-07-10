@@ -199,6 +199,36 @@
               </button>
             </div>
 
+            <div class="style-toolbar" id="styleToolbar" aria-label="Style controls">
+              <label class="range-control">
+                <span>Note</span>
+                <input id="noteSizeInput" type="range" min="80" max="160" step="5" value="100" aria-label="Note size">
+                <output id="noteSizeOutput">100%</output>
+              </label>
+              <label class="range-control">
+                <span>Aa</span>
+                <input id="noteFontSizeInput" type="range" min="10" max="22" step="1" value="13" aria-label="Note font size">
+                <output id="noteFontSizeOutput">13px</output>
+              </label>
+              <label class="color-control">
+                <span>Ink</span>
+                <input id="drawColorInput" type="color" value="#6d5bd0" aria-label="Draw color">
+              </label>
+              <label class="range-control opacity-control">
+                <span>Opacity</span>
+                <input id="drawOpacityInput" type="range" min="15" max="100" step="5" value="80" aria-label="Draw opacity">
+                <output id="drawOpacityOutput">80%</output>
+              </label>
+              <label class="toggle-control">
+                <input id="drawGradientToggle" type="checkbox" aria-label="Use drawing gradient">
+                <span>Gradient</span>
+              </label>
+              <label class="color-control gradient-color-control">
+                <span>To</span>
+                <input id="drawGradientColorInput" type="color" value="#ef745f" aria-label="Draw gradient color">
+              </label>
+            </div>
+
             <div class="canvas-scroll">
               <div class="idea-canvas" id="ideaCanvas" tabindex="0" aria-label="Idea canvas. Double click to add a note.">
                 <svg class="connections-layer" id="connectionsLayer" aria-hidden="true"></svg>
