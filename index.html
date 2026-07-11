@@ -180,7 +180,7 @@
               </button>
               <label class="editor-search">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
-                <input id="editorSearchInput" type="search" placeholder="Find idea..." autocomplete="off" aria-label="Search ideas in this scratchpad">
+                <input id="editorSearchInput" type="search" placeholder="Find any idea..." autocomplete="off" aria-label="Search all ideas">
               </label>
               <span class="tool-divider"></span>
               <button class="tool-button" id="undoButton" type="button" aria-label="Undo">
@@ -228,6 +228,8 @@
                 <input id="drawGradientColorInput" type="color" value="#ef745f" aria-label="Draw gradient color">
               </label>
             </div>
+
+            <div class="editor-search-results" id="editorSearchResults" hidden></div>
 
             <div class="canvas-scroll">
               <div class="idea-canvas" id="ideaCanvas" tabindex="0" aria-label="Idea canvas. Double click to add a note.">

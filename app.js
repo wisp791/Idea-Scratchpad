@@ -241,16 +241,27 @@ function normalizeData(source) {
   return source;
 }
 
+function isLegacySeedData(source) {
+  const seedBoardIds = new Set(["assembly", "poster", "weekend"]);
+  const seedIdeaIds = new Set(["i1", "i2", "i3", "i4"]);
+  return Array.isArray(source?.boards) &&
+    Array.isArray(source?.looseIdeas) &&
+    source.boards.length > 0 &&
+    source.boards.every(board => seedBoardIds.has(board.id)) &&
+    source.looseIdeas.every(idea => seedIdeaIds.has(idea.id));
+}
+
 function loadData() {
   try {
     const stored = JSON.parse(localStorage.getItem(STORAGE_KEY));
     if (stored?.boards && stored?.looseIdeas) {
+      if (isLegacySeedData(stored)) return normalizeData({ boards: [], looseIdeas: [] });
       return normalizeData(stored);
     }
   } catch (error) {
     console.warn("Could not load saved ideas", error);
   }
-  return normalizeData(structuredClone(seedData));
+  return normalizeData({ boards: [], looseIdeas: [] });
 }
 
 function saveData(showStatus = false) {
@@ -411,11 +422,13 @@ function renderBoards() {
 
 function getDashboardIdeas() {
   const loose = data.looseIdeas.map(idea => ({ ...idea, source: "loose" }));
-  const notes = data.boards.flatMap(board => board.pages.flatMap(page => page.notes.map(note => ({
+  const notes = data.boards.flatMap(board => board.pages.flatMap((page, pageIndex) => page.notes.map(note => ({
     ...note,
     source: "board",
     boardId: board.id,
     boardTitle: board.title,
+    pageId: page.id,
+    pageLabel: `Page ${pageIndex + 1}`,
     createdAt: board.updatedAt
   }))));
   return [...loose, ...notes];
@@ -444,6 +457,71 @@ function renderIdeaStream() {
     </article>`;
   }).join("");
   $("#ideaEmptyState").hidden = ideas.length > 0;
+}
+
+function ideaMatchesQuery(idea, query) {
+  const haystack = `${idea.text || ""} ${idea.tag || ""} ${idea.boardTitle || ""} ${idea.pageLabel || ""}`.toLowerCase();
+  return haystack.includes(query);
+}
+
+function editorSearchMatches() {
+  const query = editorSearchQuery.trim().toLowerCase();
+  if (!query) return [];
+  return getDashboardIdeas()
+    .filter(idea => ideaMatchesQuery(idea, query))
+    .sort((a, b) => {
+      const aCurrent = a.boardId === currentBoardId && a.pageId === currentPageId ? 1 : 0;
+      const bCurrent = b.boardId === currentBoardId && b.pageId === currentPageId ? 1 : 0;
+      return bCurrent - aCurrent || (b.createdAt || 0) - (a.createdAt || 0);
+    })
+    .slice(0, 10);
+}
+
+function renderEditorSearchResults() {
+  const panel = $("#editorSearchResults");
+  if (!panel) return;
+  const query = editorSearchQuery.trim();
+  if (!query || $("#editorView").hidden) {
+    panel.hidden = true;
+    panel.innerHTML = "";
+    return;
+  }
+  const matches = editorSearchMatches();
+  panel.hidden = false;
+  if (!matches.length) {
+    panel.innerHTML = `<p class="editor-search-empty">No ideas match "${escapeHtml(query)}"</p>`;
+    return;
+  }
+  panel.innerHTML = matches.map(idea => {
+    const isBoardIdea = idea.source === "board" && idea.boardId && idea.pageId;
+    const source = isBoardIdea ? `${idea.boardTitle || "Scratchpad"} - ${idea.pageLabel || "Page"}` : "Idea pile";
+    const scope = isBoardIdea && idea.boardId === currentBoardId && idea.pageId === currentPageId ? "This page" : isBoardIdea ? "Scratchpad" : "Pile";
+    return `
+      <button class="editor-search-result" type="button" data-search-result="${escapeHtml(idea.id)}" data-search-source="${idea.source}" data-search-board-id="${escapeHtml(idea.boardId || "")}" data-search-page-id="${escapeHtml(idea.pageId || "")}" data-search-note-id="${escapeHtml(idea.id || "")}">
+        <span class="result-copy"><strong>${escapeHtml(idea.text || "Untitled idea")}</strong><small>${escapeHtml(source)}</small></span>
+        <span class="result-scope">${escapeHtml(scope)}</span>
+      </button>`;
+  }).join("");
+}
+
+function focusEditorSearchResult(result) {
+  const source = result.dataset.searchSource;
+  const query = editorSearchQuery;
+  if (source === "board") {
+    openEditor(result.dataset.searchBoardId, result.dataset.searchPageId);
+    editorSearchQuery = query;
+    $("#editorSearchInput").value = query;
+    selectOnlyNote(result.dataset.searchNoteId);
+    renderCanvas();
+    renderEditorSearchResults();
+    setTimeout(() => $(`[data-note-id="${result.dataset.searchNoteId}"]`)?.scrollIntoView({ block: "center", inline: "center", behavior: "smooth" }), 0);
+    return;
+  }
+  closeEditor();
+  $("#globalSearch").value = query;
+  currentFilter = "all";
+  $$(".pill").forEach(pill => pill.classList.toggle("active", pill.dataset.filter === "all"));
+  renderDashboard();
 }
 
 function addQuickIdea() {
@@ -515,6 +593,7 @@ function openEditor(boardId, pageId, options = {}) {
 function closeEditor(options = {}) {
   $("#editorView").hidden = true;
   $("#dashboardView").hidden = false;
+  $("#editorSearchResults").hidden = true;
   document.body.style.overflow = "";
   currentBoardId = null;
   currentPageId = null;
@@ -525,6 +604,7 @@ function closeEditor(options = {}) {
 function renderEditor() {
   renderPages();
   renderCanvas();
+  renderEditorSearchResults();
 }
 
 function setInsightPanelOpen(open) {
@@ -1859,6 +1939,12 @@ function bindEvents() {
   $("#editorSearchInput").addEventListener("input", event => {
     editorSearchQuery = event.target.value.trim().toLowerCase();
     renderCanvas();
+    renderEditorSearchResults();
+  });
+  $("#editorSearchInput").addEventListener("focus", renderEditorSearchResults);
+  $("#editorSearchResults").addEventListener("click", event => {
+    const result = event.target.closest("[data-search-result]");
+    if (result) focusEditorSearchResult(result);
   });
   $("#helperOrganizeButton").addEventListener("click", organizeIdeas);
   $("#openInsightPanel").addEventListener("click", () => setInsightPanelOpen(true));
