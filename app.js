@@ -12,9 +12,9 @@ const NOTE_SIZES = {
   paper: { width: 212, height: 166 },
   card: { width: 212, height: 166 },
   bubble: { width: 216, height: 168 },
-  label: { width: 260, height: 132 },
+  label: { width: 286, height: 148 },
   square: { width: 184, height: 184 },
-  circle: { width: 196, height: 196 }
+  circle: { width: 224, height: 224 }
 };
 const DEFAULT_NOTE_STYLE = { sizeScale: 100, fontSize: 13 };
 const DEFAULT_DRAW_STYLE = { color: "#6d5bd0", opacity: .8, gradient: false, gradientTo: "#ef745f" };
