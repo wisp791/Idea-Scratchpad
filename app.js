@@ -1,6 +1,6 @@
 const STORAGE_KEY = "looseleaf-data-v5";
 const NOTE_COLORS = ["#f5df78", "#f0b7cb", "#a9d9e7", "#b9d8a8", "#dcc8ef", "#f3b493", "#f6a4a4", "#94d7c5"];
-const NOTE_VARIANTS = ["sticky", "paper", "card", "bubble", "label", "square", "circle"];
+const NOTE_VARIANTS = ["sticky", "paper", "card", "bubble", "square", "circle"];
 const PRIORITY_ORDER = ["important", "normal", "maybe"];
 const PRIORITY_META = {
   important: { label: "Important", short: "!" },
@@ -12,7 +12,6 @@ const NOTE_SIZES = {
   paper: { width: 212, height: 166 },
   card: { width: 212, height: 166 },
   bubble: { width: 216, height: 168 },
-  label: { width: 286, height: 148 },
   square: { width: 184, height: 184 },
   circle: { width: 224, height: 224 }
 };
@@ -132,7 +131,7 @@ function hashString(value = "") {
 function noteVariantFor(note, index = 0) {
   if (note.variant && NOTE_VARIANTS.includes(note.variant)) return note.variant;
   const text = note.text || "";
-  if (/deadline|minutes?|schedule|remember|must|need|only|under/i.test(text)) return "label";
+  if (/deadline|minutes?|schedule|remember|must|need|only|under/i.test(text)) return "card";
   if (/question|what if|maybe|could|why|how/i.test(text)) return "bubble";
   return NOTE_VARIANTS[Math.abs(hashString(`${note.id || text}-${index}`)) % NOTE_VARIANTS.length];
 }

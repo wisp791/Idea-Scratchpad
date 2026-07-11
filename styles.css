@@ -348,7 +348,6 @@ kbd { font-family: var(--sans); }
 .idea-shape-paper { border-radius: 2px 14px 3px 9px; }
 .idea-shape-card { border-radius: 13px; background: linear-gradient(145deg, color-mix(in srgb, var(--idea-color, var(--blue)) 54%, #fff), #fffefa); }
 .idea-shape-bubble { border-radius: 24px 28px 26px 12px; }
-.idea-shape-label { border-radius: 999px 38px 999px 32px; padding-left: 24px; }
 .idea-shape-square { aspect-ratio: 1; min-height: 165px; border-radius: 10px; }
 .idea-shape-circle { aspect-ratio: 1; min-height: 172px; border-radius: 50%; justify-content: center; text-align: center; }
 .empty-state { padding: 50px 20px; border: 1px dashed #cbc6ba; border-radius: 12px; text-align: center; color: var(--muted); }
@@ -628,8 +627,6 @@ kbd { font-family: var(--sans); }
 .note-variant-card::before { display: none; }
 .note-variant-bubble { border-radius: 24px 28px 26px 12px; border: 2px solid rgba(75,67,50,.18); background: radial-gradient(circle at 18% 12%, rgba(255,255,255,.85), transparent 36%), linear-gradient(135deg, color-mix(in srgb, var(--note-color, var(--pink)) 70%, #fff), color-mix(in srgb, var(--note-color, var(--pink)) 45%, #fff)); }
 .note-variant-bubble::before { content: "?"; top: -12px; right: 18px; left: auto; width: 28px; height: 28px; display: grid; place-items: center; border-radius: 50%; background: var(--ink); color: white; font-family: var(--hand); transform: rotate(8deg); }
-.note-variant-label { width: 248px; min-height: 104px; padding: 30px 30px 22px 46px; border-radius: 999px 38px 999px 32px; border: 2px solid rgba(67,58,41,.18); background: linear-gradient(135deg, color-mix(in srgb, var(--note-color, var(--green)) 75%, #fff), #fffbe9); }
-.note-variant-label::before { top: 50%; left: -8px; width: 16px; height: 16px; border-radius: 50%; background: rgba(255,255,255,.68); transform: translateY(-50%); }
 .note-variant-square { width: 172px; min-height: 172px; border-radius: 10px; border: 2px solid rgba(67,58,41,.15); background: linear-gradient(145deg, color-mix(in srgb, var(--note-color, var(--yellow)) 88%, #fff), color-mix(in srgb, var(--note-color, var(--yellow)) 62%, #fff)); }
 .note-variant-square::before { display: none; }
 .note-variant-circle { width: 180px; min-height: 180px; padding: 36px 34px 32px; border-radius: 50%; border: 2px solid rgba(67,58,41,.16); background: radial-gradient(circle at 28% 18%, rgba(255,255,255,.75), transparent 32%), color-mix(in srgb, var(--note-color, var(--blue)) 72%, #fff); text-align: center; }
@@ -639,10 +636,6 @@ kbd { font-family: var(--sans); }
 .note-doodle .doodle-fill { fill: currentColor; stroke: none; }
 .canvas-note:hover .note-doodle { color: rgba(56, 51, 40, .42); opacity: .34; transform: rotate(1deg) scale(1.06); }
 .note-text { position: relative; z-index: 2; width: 100%; min-height: 76px; padding: 8px 62px 0 0; resize: none; overflow: hidden; overflow-wrap: anywhere; border: 0; outline: 0; background: transparent; color: #3b382f; font-family: var(--hand); font-size: var(--note-font-size, 13px); line-height: 1.42; }
-.note-variant-label .note-text { min-height: 68px; padding: 8px 54px 0 8px; }
-.note-variant-label .note-doodle { width: 46px; height: 46px; top: 10px; right: 16px; opacity: .22; }
-.note-variant-label .note-bottom { padding-left: 8px; }
-.note-variant-label .note-tag { max-width: 48%; }
 .note-variant-circle .note-text { min-height: 108px; padding: 48px 10px 0; text-align: center; }
 .note-variant-circle .note-doodle { width: 34px; height: 34px; top: 17px; right: 50%; opacity: .2; transform: translateX(50%) rotate(4deg); }
 .note-variant-square .note-text { min-height: 100px; padding-right: 45px; }
