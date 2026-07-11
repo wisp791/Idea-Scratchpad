@@ -18,6 +18,7 @@ const NOTE_SIZES = {
 };
 const DEFAULT_NOTE_STYLE = { sizeScale: 100, fontSize: 13 };
 const DEFAULT_DRAW_STYLE = { color: "#6d5bd0", opacity: .8, gradient: false, gradientTo: "#ef745f" };
+const DEFAULT_BACKGROUND_STYLE = { color: "#faf9f4", gradient: true, gradientTo: "#eeebff", pattern: "dots" };
 const ERASER_RADIUS = 14;
 const CANVAS_WIDTH = 1040;
 const CANVAS_HEIGHT = 680;
@@ -219,6 +220,11 @@ function normalizeData(source) {
       page.connections = page.connections.map((connection, index) => normalizeConnection(connection, index));
       page.drawings ||= [];
       page.groups = (page.groups || []).filter(group => Array.isArray(group.noteIds));
+      page.background = { ...DEFAULT_BACKGROUND_STYLE, ...(page.background || {}) };
+      if (!["blank", "dots", "graph", "note", "polka"].includes(page.background.pattern)) page.background.pattern = DEFAULT_BACKGROUND_STYLE.pattern;
+      page.background.color ||= DEFAULT_BACKGROUND_STYLE.color;
+      page.background.gradient = Boolean(page.background.gradient);
+      page.background.gradientTo ||= DEFAULT_BACKGROUND_STYLE.gradientTo;
       page.notes.forEach((note, index) => {
         note.color ||= NOTE_COLORS[index % NOTE_COLORS.length];
         note.tag ||= inferTag(note.text || "");
@@ -238,6 +244,12 @@ function normalizeData(source) {
     });
   });
   source.looseIdeas ||= [];
+  source.looseIdeas.forEach((idea, index) => {
+    idea.color ||= NOTE_COLORS[index % NOTE_COLORS.length];
+    idea.tag ||= "Ungrouped";
+    idea.priority ||= "normal";
+    idea.variant = noteVariantFor(idea, index);
+  });
   return source;
 }
 
@@ -403,9 +415,14 @@ function renderBoards() {
       <article class="board-card" role="button" tabindex="0" data-board-id="${board.id}">
         <div class="board-card-top">
           <span class="board-category">${escapeHtml(board.category)}</span>
-          <button class="favorite-button ${board.favorite ? "active" : ""}" data-favorite-board="${board.id}" type="button" aria-label="${board.favorite ? "Remove from" : "Add to"} favorites">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.6l6.2-.9Z"/></svg>
-          </button>
+          <span class="board-actions">
+            <button class="favorite-button ${board.favorite ? "active" : ""}" data-favorite-board="${board.id}" type="button" aria-label="${board.favorite ? "Remove from" : "Add to"} favorites">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.6l6.2-.9Z"/></svg>
+            </button>
+            <button class="board-delete" data-delete-board="${board.id}" type="button" aria-label="Delete scratchpad">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6m4-6v6M6 7l1 14h10l1-14M9 7V4h6v3"/></svg>
+            </button>
+          </span>
         </div>
         <h3>${escapeHtml(board.title)}</h3>
         <p>${noteCount} ${noteCount === 1 ? "idea" : "ideas"} · ${board.pages.length} ${board.pages.length === 1 ? "page" : "pages"}</p>
@@ -447,16 +464,91 @@ function renderIdeaStream() {
   if (activeNav === "home" && !query) ideas = ideas.slice(0, 8);
 
   $("#ideaStream").innerHTML = ideas.map(idea => {
+    const priority = priorityMeta(idea.priority || "normal");
+    const variant = noteVariantFor(idea);
     return `
-    <article class="idea-card" role="button" tabindex="0" style="--idea-color:${idea.color}" data-idea-board="${idea.boardId || ""}">
+    <article class="idea-card idea-shape-${variant} priority-${idea.priority || "normal"}" role="button" tabindex="0" style="--idea-color:${idea.color}" data-idea-id="${idea.id}" data-idea-source="${idea.source}" data-idea-board="${idea.boardId || ""}" data-idea-page="${idea.pageId || ""}">
       <p>${escapeHtml(idea.text)}</p>
       <span class="idea-meta">
         <span class="idea-tag">${escapeHtml(idea.boardTitle || idea.tag || "Loose idea")}</span>
-        ${idea.source === "loose" ? `<button class="idea-delete" data-delete-idea="${idea.id}" type="button" aria-label="Delete idea">×</button>` : `<span>${relativeTime(idea.createdAt)}</span>`}
+        <span class="idea-actions">
+          <button class="idea-control idea-priority-control" data-idea-action="priority" type="button" aria-label="Change idea priority" title="Priority: ${priority.label}">${priority.short}</button>
+          <button class="idea-control" data-idea-action="shape" type="button" aria-label="Change idea shape" title="Change idea shape">S</button>
+          <button class="idea-control" data-idea-action="color" type="button" aria-label="Change idea color" title="Change idea color">C</button>
+          <button class="idea-control idea-delete" data-idea-action="delete" type="button" aria-label="Delete idea">×</button>
+        </span>
       </span>
     </article>`;
   }).join("");
   $("#ideaEmptyState").hidden = ideas.length > 0;
+}
+
+function findIdeaTargetFromElement(element) {
+  const source = element.dataset.ideaSource;
+  const ideaId = element.dataset.ideaId;
+  if (source === "loose") {
+    const idea = data.looseIdeas.find(item => item.id === ideaId);
+    return idea ? { source, idea } : null;
+  }
+  const board = data.boards.find(item => item.id === element.dataset.ideaBoard);
+  const page = board?.pages.find(item => item.id === element.dataset.ideaPage);
+  const idea = page?.notes.find(item => item.id === ideaId);
+  return board && page && idea ? { source, board, page, idea } : null;
+}
+
+function saveIdeaTarget(target) {
+  if (target.board) target.board.updatedAt = Date.now();
+  saveData(true);
+  renderDashboard();
+}
+
+function cycleDashboardIdeaPriority(target) {
+  const index = PRIORITY_ORDER.indexOf(target.idea.priority || "normal");
+  target.idea.priority = PRIORITY_ORDER[(Math.max(0, index) + 1) % PRIORITY_ORDER.length];
+  saveIdeaTarget(target);
+}
+
+function cycleDashboardIdeaVariant(target) {
+  const index = NOTE_VARIANTS.indexOf(target.idea.variant);
+  target.idea.variant = NOTE_VARIANTS[(Math.max(0, index) + 1) % NOTE_VARIANTS.length];
+  saveIdeaTarget(target);
+}
+
+function cycleDashboardIdeaColor(target) {
+  const index = NOTE_COLORS.indexOf(target.idea.color);
+  target.idea.color = NOTE_COLORS[(Math.max(0, index) + 1) % NOTE_COLORS.length];
+  saveIdeaTarget(target);
+}
+
+function deleteDashboardIdea(target) {
+  if (target.source === "loose") {
+    data.looseIdeas = data.looseIdeas.filter(idea => idea.id !== target.idea.id);
+  } else {
+    const deletedId = target.idea.id;
+    target.page.notes = target.page.notes.filter(note => note.id !== deletedId);
+    target.page.connections = target.page.connections.filter(connection => !connectionIds(connection).includes(deletedId));
+    target.page.groups = [];
+    target.board.updatedAt = Date.now();
+  }
+  saveData(true);
+  renderDashboard();
+  showToast("Idea deleted");
+}
+
+function deleteBoard(boardId) {
+  const board = data.boards.find(item => item.id === boardId);
+  if (!board) return;
+  data.boards = data.boards.filter(item => item.id !== boardId);
+  data.looseIdeas.forEach(idea => {
+    if (idea.boardId === boardId) {
+      idea.boardId = null;
+      idea.tag = "Ungrouped";
+    }
+  });
+  if (currentBoardId === boardId) closeEditor();
+  saveData(true);
+  renderDashboard();
+  showToast("Scratchpad deleted");
 }
 
 function ideaMatchesQuery(idea, query) {
@@ -534,7 +626,9 @@ function addQuickIdea() {
     color: NOTE_COLORS[captureColorIndex],
     boardId: null,
     tag: "Ungrouped",
-    createdAt: Date.now()
+    createdAt: Date.now(),
+    priority: "normal",
+    variant: NOTE_VARIANTS[data.looseIdeas.length % NOTE_VARIANTS.length]
   });
   input.value = "";
   input.style.height = "auto";
@@ -567,7 +661,7 @@ function createBoard(starter = "blank") {
     note.sizeScale = data.settings.note.sizeScale;
     note.fontSize = data.settings.note.fontSize;
   });
-  data.boards.unshift({ id: boardId, title, category: "New", favorite: false, updatedAt: Date.now(), pages: [{ id: pageId, notes, connections: [], drawings: [], groups: [] }] });
+  data.boards.unshift({ id: boardId, title, category: "New", favorite: false, updatedAt: Date.now(), pages: [{ id: pageId, notes, connections: [], drawings: [], groups: [], background: { ...DEFAULT_BACKGROUND_STYLE } }] });
   saveData();
   openEditor(boardId);
 }
@@ -748,11 +842,43 @@ function updateGroupOverlays() {
   });
 }
 
+function backgroundImageFor(background = DEFAULT_BACKGROUND_STYLE) {
+  const layers = [];
+  const gradientTo = background.gradientTo || DEFAULT_BACKGROUND_STYLE.gradientTo;
+  if (background.gradient) layers.push(`linear-gradient(135deg, rgba(255,255,255,.35), ${gradientTo})`);
+  if (background.pattern === "dots") layers.push("radial-gradient(#d7d3ca .75px, transparent .75px)");
+  if (background.pattern === "graph") layers.push("linear-gradient(rgba(125,118,104,.18) 1px, transparent 1px)", "linear-gradient(90deg, rgba(125,118,104,.18) 1px, transparent 1px)");
+  if (background.pattern === "note") layers.push("repeating-linear-gradient(180deg, transparent 0 27px, rgba(84,78,64,.16) 28px 29px)");
+  if (background.pattern === "polka") layers.push("radial-gradient(circle, rgba(109,91,208,.18) 0 4px, transparent 4.6px)");
+  return layers.join(", ");
+}
+
+function backgroundSizeFor(background = DEFAULT_BACKGROUND_STYLE) {
+  const sizes = [];
+  if (background.gradient) sizes.push("auto");
+  if (background.pattern === "graph") sizes.push("22px 22px", "22px 22px");
+  if (background.pattern === "note") sizes.push("auto");
+  if (background.pattern === "polka") sizes.push("34px 34px");
+  if (background.pattern === "dots") sizes.push("18px 18px");
+  return sizes.join(", ") || "auto";
+}
+
+function applyCanvasBackground() {
+  const page = getPage();
+  const canvas = $("#ideaCanvas");
+  if (!page || !canvas) return;
+  page.background = { ...DEFAULT_BACKGROUND_STYLE, ...(page.background || {}) };
+  canvas.style.backgroundColor = page.background.color || DEFAULT_BACKGROUND_STYLE.color;
+  canvas.style.backgroundImage = backgroundImageFor(page.background) || "none";
+  canvas.style.backgroundSize = backgroundSizeFor(page.background);
+}
+
 function renderCanvas() {
   const page = getPage();
   if (!page) return;
   page.drawings ||= [];
   page.groups ||= [];
+  applyCanvasBackground();
   $("#ideaCanvas").classList.toggle("drawing", currentTool === "pen");
   $("#ideaCanvas").classList.toggle("erasing", currentTool === "eraser");
   $("#connectionsLayer").classList.toggle("selecting", currentTool === "select");
@@ -911,7 +1037,7 @@ function drawConnections() {
 
 function addPage() {
   const board = getBoard();
-  const page = { id: uid("page"), notes: [], connections: [], drawings: [], groups: [] };
+  const page = { id: uid("page"), notes: [], connections: [], drawings: [], groups: [], background: { ...DEFAULT_BACKGROUND_STYLE } };
   board.pages.push(page);
   board.updatedAt = Date.now();
   currentPageId = page.id;
@@ -1542,11 +1668,17 @@ function syncStyleControls() {
   $("#drawOpacityOutput").textContent = `${opacity}%`;
   $("#drawGradientToggle").checked = Boolean(drawStyle.gradient);
   $("#drawGradientColorInput").value = drawStyle.gradientTo || data.settings.draw.gradientTo;
+
+  const background = getPage()?.background || DEFAULT_BACKGROUND_STYLE;
+  $("#scratchpadBgColorInput").value = background.color || DEFAULT_BACKGROUND_STYLE.color;
+  $("#scratchpadGradientToggle").checked = Boolean(background.gradient);
+  $("#scratchpadGradientColorInput").value = background.gradientTo || DEFAULT_BACKGROUND_STYLE.gradientTo;
+  $("#scratchpadPatternSelect").value = background.pattern || DEFAULT_BACKGROUND_STYLE.pattern;
 }
 
 function beginStyleEdit(kind) {
   if (styleControlEditing) return;
-  const hasSelectedTarget = kind === "note" ? selectedNoteIds.size > 0 : selectedDrawingIds.size > 0;
+  const hasSelectedTarget = kind === "background" ? Boolean(getPage()) : kind === "note" ? selectedNoteIds.size > 0 : selectedDrawingIds.size > 0;
   if (hasSelectedTarget) pushHistory();
   styleControlEditing = true;
 }
@@ -1606,9 +1738,24 @@ function applyDrawStyleControls() {
   drawConnections();
 }
 
+function applyBackgroundStyleControls() {
+  const page = getPage();
+  if (!page) return;
+  page.background = {
+    color: $("#scratchpadBgColorInput").value,
+    gradient: $("#scratchpadGradientToggle").checked,
+    gradientTo: $("#scratchpadGradientColorInput").value,
+    pattern: $("#scratchpadPatternSelect").value
+  };
+  getBoard().updatedAt = Date.now();
+  applyCanvasBackground();
+  saveData(true);
+}
+
 function bindStyleControls() {
   const noteInputs = [$("#noteSizeInput"), $("#noteFontSizeInput")];
   const drawInputs = [$("#drawColorInput"), $("#drawOpacityInput"), $("#drawGradientToggle"), $("#drawGradientColorInput")];
+  const backgroundInputs = [$("#scratchpadBgColorInput"), $("#scratchpadGradientToggle"), $("#scratchpadGradientColorInput"), $("#scratchpadPatternSelect")];
   noteInputs.forEach(input => {
     input.addEventListener("pointerdown", () => beginStyleEdit("note"));
     input.addEventListener("focus", () => beginStyleEdit("note"));
@@ -1622,6 +1769,16 @@ function bindStyleControls() {
     input.addEventListener("input", applyDrawStyleControls);
     input.addEventListener("change", () => {
       applyDrawStyleControls();
+      finishStyleEdit();
+    });
+    input.addEventListener("blur", finishStyleEdit);
+  });
+  backgroundInputs.forEach(input => {
+    input.addEventListener("pointerdown", () => beginStyleEdit("background"));
+    input.addEventListener("focus", () => beginStyleEdit("background"));
+    input.addEventListener("input", applyBackgroundStyleControls);
+    input.addEventListener("change", () => {
+      applyBackgroundStyleControls();
       finishStyleEdit();
     });
     input.addEventListener("blur", finishStyleEdit);
@@ -1779,6 +1936,12 @@ function bindEvents() {
   }, true);
 
   $("#boardGrid").addEventListener("click", event => {
+    const deleteBoardButton = event.target.closest("[data-delete-board]");
+    if (deleteBoardButton) {
+      event.stopPropagation();
+      deleteBoard(deleteBoardButton.dataset.deleteBoard);
+      return;
+    }
     const favorite = event.target.closest("[data-favorite-board]");
     if (favorite) {
       event.stopPropagation();
@@ -1800,13 +1963,17 @@ function bindEvents() {
   });
 
   $("#ideaStream").addEventListener("click", event => {
-    const deleteButton = event.target.closest("[data-delete-idea]");
-    if (deleteButton) {
+    const ideaAction = event.target.closest("[data-idea-action]");
+    if (ideaAction) {
       event.stopPropagation();
-      data.looseIdeas = data.looseIdeas.filter(idea => idea.id !== deleteButton.dataset.deleteIdea);
-      saveData();
-      renderDashboard();
-      showToast("Idea recycled");
+      const card = ideaAction.closest(".idea-card");
+      const target = findIdeaTargetFromElement(card);
+      if (!target) return;
+      const action = ideaAction.dataset.ideaAction;
+      if (action === "priority") cycleDashboardIdeaPriority(target);
+      if (action === "shape") cycleDashboardIdeaVariant(target);
+      if (action === "color") cycleDashboardIdeaColor(target);
+      if (action === "delete") deleteDashboardIdea(target);
       return;
     }
     const card = event.target.closest("[data-idea-board]");
@@ -1982,7 +2149,7 @@ function bindEvents() {
   $("#zoomIn").addEventListener("click", () => applyZoom(zoom + .1));
   $("#zoomOut").addEventListener("click", () => applyZoom(zoom - .1));
   $("#shareButton").addEventListener("click", shareBoard);
-  $("#editorMenuButton").addEventListener("click", () => showToast("More scratchpad options are coming soon"));
+  $("#deleteBoardButton").addEventListener("click", () => deleteBoard(currentBoardId));
 }
 
 setGreeting();
